@@ -1,27 +1,57 @@
 import { betterAuth } from 'better-auth'
-import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { nextCookies } from 'better-auth/next-js'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { db } from '@/lib/db'
-import * as schema from '@/lib/db/schema'
-
-const isDev = process.env.NODE_ENV !== 'production'
+import { pool } from '@/lib/db'
 
 export const auth = betterAuth({
-  database: drizzleAdapter(db, { provider: 'pg', schema }),
-  emailAndPassword: { enabled: true, minPasswordLength: 8 },
+  database: pool,
+  baseURL:
+    process.env.BETTER_AUTH_URL ??
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : process.env.V0_RUNTIME_URL),
+  emailAndPassword: {
+    enabled: true,
+    autoSignIn: true,
+    minPasswordLength: 8,
+  },
   trustedOrigins: [
-    'http://localhost:3000',
-    ...(process.env.NEXT_PUBLIC_V0_PREVIEW_ORIGINS?.split(',') ?? []),
-    ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : []),
-    ...(process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? [`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`]
+    ...(process.env.NODE_ENV === 'development'
+      ? [
+          'http://localhost:3000',
+          ...(process.env.V0_RUNTIME_URL ? [process.env.V0_RUNTIME_URL] : []),
+          ...(process.env.V0_DEV_APP_URL ? [process.env.V0_DEV_APP_URL] : []),
+          ...(process.env.V0_BUILD_URL ? [process.env.V0_BUILD_URL] : []),
+          ...(process.env.V0_SANDBOX_URL ? [process.env.V0_SANDBOX_URL] : []),
+        ]
       : []),
-    '*.vusercontent.net',
+    ...(process.env.NODE_ENV === 'production'
+      ? [
+          ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : []),
+          ...(process.env.VERCEL_PROJECT_PRODUCTION_URL
+            ? [`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`]
+            : []),
+        ]
+      : []),
   ],
-  advanced: isDev ? { defaultCookieAttributes: { sameSite: 'none', secure: true } } : undefined,
-  plugins: [nextCookies()],
+  session: {
+    expiresIn: 60 * 60 * 24 * 7,
+    updateAge: 60 * 60 * 24,
+  },
+  ...(process.env.NODE_ENV === 'development'
+    ? {
+        advanced: {
+          // Required by the cross-site v0 preview iframe. Without these
+          // attributes, login succeeds but the next request appears signed out.
+          defaultCookieAttributes: {
+            sameSite: 'none' as const,
+            secure: true,
+          },
+        },
+      }
+    : {}),
 })
 
 export async function getSession() {
@@ -30,6 +60,6 @@ export async function getSession() {
 
 export async function requireSession() {
   const session = await getSession()
-  if (!session) redirect('/sign-in')
+  if (!session?.user) redirect('/sign-in')
   return session
 }
